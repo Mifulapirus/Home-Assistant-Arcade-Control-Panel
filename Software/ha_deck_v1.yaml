@@ -1,0 +1,405 @@
+esphome:
+  name: ha-arcade-panel
+  friendly_name: HA Arcade Panel
+  on_boot:
+    priority: -100
+    then:
+      - display.page.show: page_time
+      - lambda: |-
+          id(display_mode) = 0;
+
+esp32:
+  board: lolin32
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: INFO
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: "cujoandcoqueta"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # Enable fallback hotspot in case WiFi connection fails
+  ap:
+    ssid: "HA-Arcade-Panel"
+    password: !secret ap_password 
+
+captive_portal:
+
+# Global variables for display management
+globals:
+  - id: display_mode
+    type: int
+    restore_value: no
+    initial_value: '0'  # 0=time, 1=temp, 2=custom
+  - id: custom_text
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: text_duration
+    type: int
+    restore_value: no
+    initial_value: '5000'
+  - id: text_font_size
+    type: int
+    restore_value: no
+    initial_value: '1'  # 1=small, 2=medium, 3=large
+  - id: text_start_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+
+# I2C Bus for OLED Display
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+  id: bus_a
+
+# Fonts for display
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 12
+  - file: "gfonts://Roboto"
+    id: font_medium
+    size: 16
+  - file: "gfonts://Roboto"
+    id: font_large
+    size: 24
+  - file: "gfonts://Roboto"
+    id: font_time
+    size: 28
+
+# 1.3" OLED Display (SH1106 or SSD1306)
+display:
+  - platform: ssd1306_i2c
+    model: "SH1106 128x64"  # Change to SSD1306_128X64 if using SSD1306
+    id: display_page
+    address: 0x3C  # Standard address - check I2C scan logs for actual address
+    update_interval: 1s
+    pages:
+      - id: page_time
+        lambda: |-
+          it.strftime(64, 20, id(font_time), TextAlign::CENTER, "%H:%M", id(ha_time).now());
+          it.strftime(64, 45, id(font_small), TextAlign::CENTER, "%d %b %Y", id(ha_time).now());
+      
+      - id: page_temp
+        lambda: |-
+          it.printf(64, 10, id(font_medium), TextAlign::CENTER, "Temperature");
+          if (id(dht_temperature).has_state()) {
+            it.printf(64, 30, id(font_large), TextAlign::CENTER, "%.1f°C", id(dht_temperature).state);
+          }
+          if (id(dht_humidity).has_state()) {
+            it.printf(64, 52, id(font_small), TextAlign::CENTER, "Humidity: %.0f%%", id(dht_humidity).state);
+          }
+      
+      - id: page_custom
+        lambda: |-
+          // Check if custom text display duration has expired
+          if (millis() - id(text_start_time) > id(text_duration)) {
+            id(display_mode) = 0;
+            return;
+          }
+          
+          // Select font based on text_font_size
+          auto font = id(font_small);
+          if (id(text_font_size) == 2) font = id(font_medium);
+          else if (id(text_font_size) == 3) font = id(font_large);
+          
+          it.printf(64, 32, font, TextAlign::CENTER, "%s", id(custom_text).c_str());
+
+# Time component for display
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: "America/New_York"  # Change to your timezone
+
+# Interval to cycle between display pages
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (id(display_mode) == 0) {
+            // Switch from time to temperature
+            id(display_page).show_page(id(page_temp));
+            id(display_mode) = 1;
+          } else if (id(display_mode) == 1) {
+            // Switch from temperature to time
+            id(display_page).show_page(id(page_time));
+            id(display_mode) = 0;
+          }
+          // mode 2 (custom text) doesn't auto-cycle
+
+# DHT22 Temperature and Humidity Sensor
+sensor:
+  - platform: dht
+    pin: GPIO04
+    model: DHT22
+    temperature:
+      name: "Arcade Panel Temperature"
+      id: dht_temperature
+      accuracy_decimals: 1
+      filters:
+        - offset: 0.0  # Calibration offset if needed
+    humidity:
+      name: "Arcade Panel Humidity"
+      id: dht_humidity
+      accuracy_decimals: 0
+    update_interval: 30s
+  
+  # Heat Index (calculated from temp and humidity)
+  - platform: template
+    name: "Arcade Panel Heat Index"
+    lambda: |-
+      if (id(dht_temperature).has_state() && id(dht_humidity).has_state()) {
+        float temp = id(dht_temperature).state;
+        float hum = id(dht_humidity).state;
+        // Heat index calculation (Fahrenheit based, convert C to F)
+        float tempF = temp * 9.0 / 5.0 + 32.0;
+        float hi = -42.379 + 2.04901523*tempF + 10.14333127*hum - 0.22475541*tempF*hum;
+        hi += -0.00683783*tempF*tempF - 0.05481717*hum*hum + 0.00122874*tempF*tempF*hum;
+        hi += 0.00085282*tempF*hum*hum - 0.00000199*tempF*tempF*hum*hum;
+        // Convert back to Celsius
+        return (hi - 32.0) * 5.0 / 9.0;
+      }
+      return 0.0;
+    unit_of_measurement: "°C"
+    update_interval: 30s
+  
+  # Dew Point (calculated)
+  - platform: template
+    name: "Arcade Panel Dew Point"
+    lambda: |-
+      if (id(dht_temperature).has_state() && id(dht_humidity).has_state()) {
+        float temp = id(dht_temperature).state;
+        float hum = id(dht_humidity).state;
+        float a = 17.27;
+        float b = 237.7;
+        float alpha = ((a * temp) / (b + temp)) + log(hum/100.0);
+        return (b * alpha) / (a - alpha);
+      }
+      return 0.0;
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    update_interval: 30s
+  
+  # WiFi Signal Strength
+  - platform: wifi_signal
+    name: "Arcade Panel WiFi Signal"
+    update_interval: 60s
+
+# Text Sensors
+text_sensor:
+  # Hardware Version
+  - platform: template
+    name: "Hardware Version"
+    id: hardware_version
+    icon: "mdi:chip"
+    update_interval: 60s
+    lambda: |-
+      return {"HA Deck 1.0"};
+
+# Binary Sensors - Buttons with internal pull-ups
+binary_sensor:
+  # Blue Button
+  - platform: gpio
+    pin:
+      number: GPIO17
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    name: "Blue Button"
+    id: button_blue
+    on_press:
+      then:
+        - light.toggle: led_blue
+        - output.turn_on: buzzer_output
+        - delay: 50ms
+        - output.turn_off: buzzer_output
+  
+  # Green Button
+  - platform: gpio
+    pin:
+      number: GPIO19
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    name: "Green Button"
+    id: button_green
+    on_press:
+      then:
+        - light.toggle: led_green
+        - output.turn_on: buzzer_output
+        - delay: 50ms
+        - output.turn_off: buzzer_output
+  
+  # Red Button
+  - platform: gpio
+    pin:
+      number: GPIO33
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    name: "Red Button"
+    id: button_red
+    on_press:
+      then:
+        - light.toggle: led_red
+        - output.turn_on: buzzer_output
+        - delay: 50ms
+        - output.turn_off: buzzer_output
+  
+  # White Button
+  - platform: gpio
+    pin:
+      number: GPIO26
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    name: "White Button"
+    id: button_white
+    on_press:
+      then:
+        - light.toggle: led_white
+        - output.turn_on: buzzer_output
+        - delay: 50ms
+        - output.turn_off: buzzer_output
+  
+  # Yellow Button
+  - platform: gpio
+    pin:
+      number: GPIO27
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    name: "Yellow Button"
+    id: button_yellow
+    on_press:
+      then:
+        - light.toggle: led_yellow
+        - output.turn_on: buzzer_output
+        - delay: 50ms
+        - output.turn_off: buzzer_output
+  
+  # RCWL-0516 Motion Sensor
+  - platform: gpio
+    pin: GPIO23
+    name: "Arcade Panel Motion"
+    device_class: motion
+    id: motion_sensor
+
+# Output for Buzzer
+output:
+  - platform: gpio
+    pin: GPIO13
+    id: buzzer_output
+
+# LED Outputs
+  - platform: gpio
+    pin: GPIO16
+    id: output_blue
+  
+  - platform: gpio
+    pin: GPIO18
+    id: output_green
+  
+  - platform: gpio
+    pin: GPIO32
+    id: output_red
+  
+  - platform: gpio
+    pin: GPIO25
+    id: output_white
+  
+  - platform: gpio
+    pin: GPIO14
+    id: output_yellow
+
+# Light entities for LEDs
+light:
+  - platform: binary
+    name: "Blue LED"
+    id: led_blue
+    output: output_blue
+    restore_mode: RESTORE_DEFAULT_OFF
+  
+  - platform: binary
+    name: "Green LED"
+    id: led_green
+    output: output_green
+    restore_mode: RESTORE_DEFAULT_OFF
+  
+  - platform: binary
+    name: "Red LED"
+    id: led_red
+    output: output_red
+    restore_mode: RESTORE_DEFAULT_OFF
+  
+  - platform: binary
+    name: "White LED"
+    id: led_white
+    output: output_white
+    restore_mode: RESTORE_DEFAULT_OFF
+  
+  - platform: binary
+    name: "Yellow LED"
+    id: led_yellow
+    output: output_yellow
+    restore_mode: RESTORE_DEFAULT_OFF
+
+# Text inputs for custom display messages
+text:
+  - platform: template
+    name: "Display Message"
+    id: display_message_input
+    optimistic: true
+    min_length: 0
+    max_length: 100
+    mode: text
+    on_value:
+      then:
+        - lambda: |-
+            id(custom_text) = x;
+            id(text_start_time) = millis();
+            id(display_mode) = 2;
+        - display.page.show: page_custom
+
+# Number inputs for display control
+number:
+  - platform: template
+    name: "Display Duration"
+    id: display_duration_input
+    optimistic: true
+    min_value: 1000
+    max_value: 60000
+    step: 1000
+    initial_value: 5000
+    unit_of_measurement: "ms"
+    mode: box
+    on_value:
+      then:
+        - lambda: |-
+            id(text_duration) = x;
+
+# Status LED (optional - uses onboard LED)
+status_led:
+  pin:
+    number: GPIO2
+    inverted: false
