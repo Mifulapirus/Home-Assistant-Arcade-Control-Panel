@@ -493,10 +493,10 @@ number:
     name: "Display D Scroll Speed"
     id: scroll_speed_input
     optimistic: true
-    min_value: 20
-    max_value: 100
-    step: 1
-    initial_value: 3
+    min_value: 10
+    max_value: 80
+    step: 5
+    initial_value: 20
     unit_of_measurement: "px/s"
     mode: slider
     on_value:
@@ -515,7 +515,7 @@ select:
       - "Small"
       - "Medium"
       - "Large"
-    initial_option: "Small"
+    initial_option: "Medium"
     on_value:
       then:
         - lambda: |-
@@ -537,6 +537,7 @@ select:
       - "Rising Tone"
       - "Alert Pattern"
       - "Success Chirp"
+      - "Error Chirp"
       - "Error Buzz"
       - "Doorbell"
       - "SOS Pattern"
@@ -692,6 +693,29 @@ select:
                   level: 50%
               - delay: 100ms
               - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Error Chirp";'
+            then:
+              # C-G happy chirp
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 1047Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 50ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 784Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 50ms
+              - output.turn_off: buzzer_output
+
         - if:
             condition:
               lambda: 'return x == "Error Buzz";'
