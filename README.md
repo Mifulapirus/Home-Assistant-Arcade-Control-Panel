@@ -28,6 +28,7 @@ Home Assistant Control Panel project, including hardware designs and firmware fo
   - Buzzer for audio feedback
 - KiCad project files located in `Hardware/HA Deck 1.0`
 - Firmware located in `Software/`
+![HA Deck v1.0 Schematic](Hardware/HA%20Deck%201.0/1.0%20schematic.jpg)
 
 ## Firmware
 
@@ -67,3 +68,4 @@ Home Assistant Control Panel project, including hardware designs and firmware fo
 3. Flash ESPHome firmware via USB
 4. Device auto-discovers in Home Assistant
 5. Configure automations and integrations
+

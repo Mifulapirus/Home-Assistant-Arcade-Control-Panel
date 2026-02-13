@@ -59,6 +59,14 @@ globals:
     type: unsigned long
     restore_value: no
     initial_value: '0'
+  - id: scroll_offset
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: scroll_speed
+    type: int
+    restore_value: no
+    initial_value: '3'
 
 # I2C Bus for OLED Display
 i2c:
@@ -88,7 +96,7 @@ display:
     model: "SH1106 128x64"  # Change to SSD1306_128X64 if using SSD1306
     id: display_page
     address: 0x3C  # Standard address - check I2C scan logs for actual address
-    update_interval: 1s
+    update_interval: 100ms  # Fast refresh for smooth text scrolling
     pages:
       - id: page_time
         lambda: |-
@@ -107,9 +115,10 @@ display:
       
       - id: page_custom
         lambda: |-
-          // Check if custom text display duration has expired
-          if (millis() - id(text_start_time) > id(text_duration)) {
+          // Check if custom text display duration has expired (convert seconds to ms)
+          if (millis() - id(text_start_time) > (id(text_duration) * 1000)) {
             id(display_mode) = 0;
+            id(scroll_offset) = 0;
             return;
           }
           
@@ -118,7 +127,27 @@ display:
           if (id(text_font_size) == 2) font = id(font_medium);
           else if (id(text_font_size) == 3) font = id(font_large);
           
-          it.printf(64, 32, font, TextAlign::CENTER, "%s", id(custom_text).c_str());
+          // Measure text width
+          int x1 = 0, y1 = 0, text_width = 0, text_height = 0;
+          it.get_text_bounds(0, 0, id(custom_text).c_str(), font, TextAlign::TOP_LEFT, &x1, &y1, &text_width, &text_height);
+          
+          // If text fits on screen, center it
+          if (text_width <= 128) {
+            it.printf(64, 32, font, TextAlign::CENTER, "%s", id(custom_text).c_str());
+            id(scroll_offset) = 0;
+          } else {
+            // Scroll text from right to left
+            int x_pos = 128 - id(scroll_offset);
+            it.printf(x_pos, 32, font, TextAlign::TOP_LEFT, "%s", id(custom_text).c_str());
+            
+            // Update scroll offset (moves scroll_speed pixels per update)
+            id(scroll_offset) += id(scroll_speed);
+            
+            // Reset when text has scrolled off screen
+            if (id(scroll_offset) > text_width + 128) {
+              id(scroll_offset) = 0;
+            }
+          }
 
 # Time component for display
 time:
@@ -199,6 +228,20 @@ sensor:
   - platform: wifi_signal
     name: "Arcade Panel WiFi Signal"
     update_interval: 60s
+    entity_category: "diagnostic"
+
+  
+  # Uptime sensor
+  - platform: uptime
+    name: "Arcade Panel Uptime"
+    update_interval: 60s
+    entity_category: "diagnostic"
+  
+  # Free heap memory
+  - platform: internal_temperature
+    name: "ESP32 Internal Temperature"
+    update_interval: 60s
+    entity_category: "diagnostic"
 
 # Text Sensors
 text_sensor:
@@ -207,9 +250,20 @@ text_sensor:
     name: "Hardware Version"
     id: hardware_version
     icon: "mdi:chip"
-    update_interval: 60s
     lambda: |-
       return {"HA Deck 1.0"};
+    entity_category: "diagnostic"
+  
+  # IP Address
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      icon: "mdi:ip-network"
+      entity_category: "diagnostic"
+    mac_address:
+      name: "MAC Address"
+      icon: "mdi:network-outline"
+      entity_category: "diagnostic"
 
 # Binary Sensors - Buttons with internal pull-ups
 binary_sensor:
@@ -226,7 +280,12 @@ binary_sensor:
     on_press:
       then:
         - light.toggle: led_blue
-        - output.turn_on: buzzer_output
+        - output.set_level:
+            id: buzzer_output
+            level: 50%
+        - output.ledc.set_frequency:
+            id: buzzer_output
+            frequency: 2000Hz
         - delay: 50ms
         - output.turn_off: buzzer_output
   
@@ -243,7 +302,12 @@ binary_sensor:
     on_press:
       then:
         - light.toggle: led_green
-        - output.turn_on: buzzer_output
+        - output.set_level:
+            id: buzzer_output
+            level: 50%
+        - output.ledc.set_frequency:
+            id: buzzer_output
+            frequency: 2200Hz
         - delay: 50ms
         - output.turn_off: buzzer_output
   
@@ -260,7 +324,12 @@ binary_sensor:
     on_press:
       then:
         - light.toggle: led_red
-        - output.turn_on: buzzer_output
+        - output.set_level:
+            id: buzzer_output
+            level: 50%
+        - output.ledc.set_frequency:
+            id: buzzer_output
+            frequency: 2400Hz
         - delay: 50ms
         - output.turn_off: buzzer_output
   
@@ -277,7 +346,12 @@ binary_sensor:
     on_press:
       then:
         - light.toggle: led_white
-        - output.turn_on: buzzer_output
+        - output.set_level:
+            id: buzzer_output
+            level: 50%
+        - output.ledc.set_frequency:
+            id: buzzer_output
+            frequency: 2600Hz
         - delay: 50ms
         - output.turn_off: buzzer_output
   
@@ -294,7 +368,12 @@ binary_sensor:
     on_press:
       then:
         - light.toggle: led_yellow
-        - output.turn_on: buzzer_output
+        - output.set_level:
+            id: buzzer_output
+            level: 50%
+        - output.ledc.set_frequency:
+            id: buzzer_output
+            frequency: 2800Hz
         - delay: 50ms
         - output.turn_off: buzzer_output
   
@@ -305,11 +384,17 @@ binary_sensor:
     device_class: motion
     id: motion_sensor
 
-# Output for Buzzer
+# Output for Buzzer (PWM for tone generation)
 output:
-  - platform: gpio
+  - platform: ledc
     pin: GPIO13
     id: buzzer_output
+    frequency: 2000Hz
+
+  # Status LED Output (GPIO2)
+  - platform: gpio
+    pin: GPIO2
+    id: output_status
 
 # LED Outputs
   - platform: gpio
@@ -335,39 +420,45 @@ output:
 # Light entities for LEDs
 light:
   - platform: binary
-    name: "Blue LED"
+    name: "LED 1 Blue"
     id: led_blue
     output: output_blue
     restore_mode: RESTORE_DEFAULT_OFF
   
   - platform: binary
-    name: "Green LED"
+    name: "LED 2 Green"
     id: led_green
     output: output_green
     restore_mode: RESTORE_DEFAULT_OFF
   
   - platform: binary
-    name: "Red LED"
+    name: "LED 3 Red"
     id: led_red
     output: output_red
     restore_mode: RESTORE_DEFAULT_OFF
   
   - platform: binary
-    name: "White LED"
+    name: "LED 4 White"
     id: led_white
     output: output_white
     restore_mode: RESTORE_DEFAULT_OFF
   
   - platform: binary
-    name: "Yellow LED"
+    name: "LED 5 Yellow"
     id: led_yellow
     output: output_yellow
+    restore_mode: RESTORE_DEFAULT_OFF
+  
+  - platform: binary
+    name: "LED 6 Status"
+    id: led_status
+    output: output_status
     restore_mode: RESTORE_DEFAULT_OFF
 
 # Text inputs for custom display messages
 text:
   - platform: template
-    name: "Display Message"
+    name: "Display A Message"
     id: display_message_input
     optimistic: true
     min_length: 0
@@ -384,22 +475,319 @@ text:
 # Number inputs for display control
 number:
   - platform: template
-    name: "Display Duration"
+    name: "Display C Duration"
     id: display_duration_input
     optimistic: true
-    min_value: 1000
-    max_value: 60000
-    step: 1000
-    initial_value: 5000
-    unit_of_measurement: "ms"
+    min_value: 1
+    max_value: 300
+    step: 1
+    initial_value: 30
+    unit_of_measurement: "s"
     mode: box
     on_value:
       then:
         - lambda: |-
             id(text_duration) = x;
+  
+  - platform: template
+    name: "Display D Scroll Speed"
+    id: scroll_speed_input
+    optimistic: true
+    min_value: 20
+    max_value: 100
+    step: 1
+    initial_value: 3
+    unit_of_measurement: "px/s"
+    mode: slider
+    on_value:
+      then:
+        - lambda: |-
+            id(scroll_speed) = x;
 
-# Status LED (optional - uses onboard LED)
-status_led:
-  pin:
-    number: GPIO2
-    inverted: false
+# Select inputs for display and buzzer control
+select:
+  # Font size selector
+  - platform: template
+    name: "Display B Font Size"
+    id: font_size_select
+    optimistic: true
+    options:
+      - "Small"
+      - "Medium"
+      - "Large"
+    initial_option: "Small"
+    on_value:
+      then:
+        - lambda: |-
+            if (x == "Small") id(text_font_size) = 1;
+            else if (x == "Medium") id(text_font_size) = 2;
+            else if (x == "Large") id(text_font_size) = 3;
+  
+  # Buzzer pattern selector
+  - platform: template
+    name: "Buzzer Pattern"
+    id: buzzer_pattern_select
+    optimistic: true
+    options:
+      - "None"
+      - "Short Beep"
+      - "Beep-Beep"
+      - "Long Beep"
+      - "Triple Beep"
+      - "Rising Tone"
+      - "Alert Pattern"
+      - "Success Chirp"
+      - "Error Buzz"
+      - "Doorbell"
+      - "SOS Pattern"
+    initial_option: "None"
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return x == "Short Beep";'
+            then:
+              # C note (523 Hz)
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 523Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Beep-Beep";'
+            then:
+              # Two E notes (659 Hz)
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 659Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Long Beep";'
+            then:
+              # Low A note (440 Hz)
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 440Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 500ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Triple Beep";'
+            then:
+              # C-E-G chord progression
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 523Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 659Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 784Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Rising Tone";'
+            then:
+              # Rising scale: C-D-E
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 523Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 150ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 587Hz
+              - delay: 150ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 659Hz
+              - delay: 150ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Alert Pattern";'
+            then:
+              # Alternating high-low tones
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 800Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 200ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 600Hz
+              - delay: 200ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 800Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 200ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 600Hz
+              - delay: 200ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Success Chirp";'
+            then:
+              # G-C happy chirp
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 784Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 50ms
+              - output.turn_off: buzzer_output
+              - delay: 50ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 1047Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Error Buzz";'
+            then:
+              # Low buzz (200 Hz)
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 200Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 70%
+              - delay: 400ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "Doorbell";'
+            then:
+              # Ding-dong (E-C)
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 659Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 150ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 523Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 150ms
+              - output.turn_off: buzzer_output
+        - if:
+            condition:
+              lambda: 'return x == "SOS Pattern";'
+            then:
+              # SOS in morse: ... --- ...
+              # Short beeps (S)
+              - output.ledc.set_frequency:
+                  id: buzzer_output
+                  frequency: 800Hz
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 200ms
+              # Long beeps (O)
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 300ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 300ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 300ms
+              - output.turn_off: buzzer_output
+              - delay: 200ms
+              # Short beeps (S)
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
+              - delay: 100ms
+              - output.set_level:
+                  id: buzzer_output
+                  level: 50%
+              - delay: 100ms
+              - output.turn_off: buzzer_output
